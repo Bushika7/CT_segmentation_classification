@@ -42,7 +42,7 @@ print("All packages installed and working!")
 #### Data Folders
 
 root_folder = Path(__file__).parent #  automatically finds the folder containing this, Milestone1.py
-voi_path = Path(root_folder, r'VOIs\VOIs')
+voi_path = Path(root_folder, r'VOIs\VOIs') # using relative paths means it's easier to work with the project on multiple computers
 
 NiiFile='LIDC-IDRI-0001_R_1.nii.gz'
 

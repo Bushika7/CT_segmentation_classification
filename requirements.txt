@@ -6,3 +6,4 @@ scikit_learn==1.6.1
 scipy==1.15.2
 simpleitk==2.5.0
 scikit_image
+openpyxl

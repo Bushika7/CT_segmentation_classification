@@ -110,30 +110,7 @@ vois = pd.merge(ct_image, ct_nodule_mask, on ='filename')
 print("DataFrame created! Printing the first 5 elements")
 vois.head(5)
 
-# We import the meta data file
-dirname=Path(root_folder,"MetadatabyNoduleMaxVoting.xlsx")
-df = pd.read_excel(dirname)
-df.head()
 
-max_voting = df.groupby(['patient_id']).agg(lambda x: x.mode()[0]).reset_index()
-print("Data imported and grouped by patient! Printing the first 5 elements")
-max_voting.head(5)
-
-#We check the number of different patients in df and we compare it to the number of different patients in max_voting
-print("# Different patients in the original dataset: ", len(df['patient_id'].unique()))
-print("# Different patients in the dataset grouped by patients: ", len(max_voting['patient_id'].unique()))
-
-#Make Max-Voting to obtain the “Diagnosis”:
-#    1. if two or more radiologists have characterized the nodule with a Malignancy score > 3, then Diagnosis=1 (malignant),
-#    2. otherwise Diagnosis=0 (benign).
-malign = np.where(max_voting['Malignancy_value'] > 3)
-benign = np.where(max_voting['Malignancy_value'] <= 3)
-max_voting.loc[malign[0], 'Diagnosis_value'] = 1
-max_voting.loc[malign[0], 'Diagnosis'] = 'Malign'
-max_voting.loc[benign[0], 'Diagnosis_value'] = 0
-max_voting.loc[benign[0], 'Diagnosis'] = 'Benign'
-print("Max-Voting created! Printing the first 5 elements")
-print(max_voting.head(5))
 
 # 1. Use a classic standard pipeline over intensity volumes.
 # 2. Use Otsu threholding and different morphological operations.

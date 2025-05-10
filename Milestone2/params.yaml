@@ -1,0 +1,10 @@
+imageType:
+  Original: {}
+
+setting:
+  binWidth: 25
+  resampledPixelSpacing: [1, 1, 1]
+  interpolator: 'sitkBSpline'
+  normalize: true
+  removeOutliers: 3
+

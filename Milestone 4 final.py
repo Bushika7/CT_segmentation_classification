@@ -1,3 +1,5 @@
+#   MILESTONE 4
+#Import packages
 import pandas as pd
 import matplotlib.pyplot as plt
 import nibabel as nib
@@ -12,6 +14,9 @@ from skimage import morphology as Morpho
 from scipy.ndimage import filters as filt
 from scipy.ndimage import distance_transform_edt as bwdist
 from skimage.measure import find_contours as contour
+from BasicSegmentation import BasicSegmentation
+from Comparation import comparation
+
 # For Milestone 2: Data Exploration and Clustering
 from sklearn.cluster import AgglomerativeClustering, KMeans, DBSCAN
 from scipy.cluster.hierarchy import linkage, dendrogram
@@ -28,6 +33,9 @@ from sklearn.pipeline import Pipeline
 import scipy.stats as st
 from sklearn.manifold import TSNE
 import seaborn as sns # For enhanced plotting
+import optuna
+from optuna.samplers import TPESampler
+from sklearn.metrics import accuracy_score
 # from radiomics import featureextractor # Uncomment if you fix the feature extraction in Milestone2_part2
 import SimpleITK as sitk # Required if using PyRadiomics, included based on Milestone2_part2.py snippet
 
@@ -41,7 +49,13 @@ METADATA_FILE = Path("C:\\Users\\sansg\\Downloads\\MetadatabyNoduleMaxVoting.xls
 ASSIGNMENT_DIR = Path("C:\\Users\\sansg\\OneDrive\\Escriptori\\Assignment 2")
 
 # --- Functions ---
-
+def show_boxplot(df):
+    plt.rcParams['figure.figsize'] = [14,6]
+    sns.boxplot(data = df, orient="v")
+    plt.title("Outliers Distribution", fontsize = 16)
+    plt.ylabel("Range", fontweight = 'bold')
+    plt.xlabel("Attributes", fontweight = 'bold')
+    
 def load_and_extract_nii_info(folder_path: Path, prefix: str):
     """Loads NIfTI files from a folder and extracts basic info."""
     file_info_list = []
@@ -85,6 +99,26 @@ def process_nodule_metadata(metadata_filepath: Path):
     max_voting_df['Diagnosis'] = np.where(max_voting_df['Malignancy_mode'] > 3, 'Malign', 'Benign')
 
     return max_voting_df
+
+def objective(trial, X_train, y_train, groups_train):
+    # Hyperparameters to optimize
+    C = trial.suggest_float("C", 1e-3, 1e3, log=True)
+    kernel = trial.suggest_categorical("kernel", ["linear", "rbf"])
+    
+    # Conditional parameters
+    params = {
+        "C": C,
+        "kernel": kernel,
+        "shrinking": trial.suggest_categorical("shrinking", [True, False]),
+        "tol": trial.suggest_float("tol", 1e-5, 1e-1, log=True)
+    }
+
+    # Model training and validation
+    model = SVC(**params, random_state=42, class_weight='balanced')
+    scores = cross_val_score(
+        model, X_train, y_train, cv=cv_inner, groups=groups_train, scoring="accuracy"
+    )
+    return scores.mean()
 
 def generate_conceptual_radiomic_viz():
     """
@@ -140,101 +174,81 @@ def generate_conceptual_radiomic_viz():
     print("\nBy quantifying these relationships, GLCM features provide numerical descriptors of the texture within the nodule.")
     print("These numerical features are then fed into a machine learning model for classification.")
 
-# --- MILESTONE 1 ---
-if __name__ == "__main__":
-    print("Starting Lung Nodule Analysis Workflow.")
 
-    # 1. Load and process NIfTI file information
-    print("Loading NIfTI file information...")
-    df_image_info = load_and_extract_nii_info(VOIS_IMAGE_DIR, 'Image')
-    df_mask_info = load_and_extract_nii_info(VOIS_MASK_DIR, 'Nodule_mask')
+#   MILESTONE 1
+print("Starting Lung Nodule Analysis Workflow.")
 
-    print(f"Length of df_mask_info: {len(df_mask_info)}")
-    print(f"Length of df_image_info: {len(df_image_info)}")
+# 1. Load and process NIfTI file information
+print("Loading NIfTI file information...")
+df_image_info = load_and_extract_nii_info(VOIS_IMAGE_DIR, 'Image')
+df_mask_info = load_and_extract_nii_info(VOIS_MASK_DIR, 'Nodule_mask')
 
-    # Extract common key for merging (e.g., LIDC-IDRI-0001_1 from filename)
-    df_image_info['file_key'] = df_image_info['filename'].str.replace('_R_', '_').str.replace('.nii.gz', '', regex=False)
-    df_mask_info['file_key'] = df_mask_info['filename'].str.replace('_R_', '_').str.replace('.nii.gz', '', regex=False)
+print(f"Length of df_mask_info: {len(df_mask_info)}")
+print(f"Length of df_image_info: {len(df_image_info)}")
 
-    vois_combined_info = pd.merge(df_image_info, df_mask_info, on='file_key', suffixes=('_image', '_mask'))
-    vois_combined_info.drop(columns=['file_key'], inplace=True)
-    print("Combined VOIs information:")
-    print(vois_combined_info.head())
+# Extract common key for merging (e.g., LIDC-IDRI-0001_1 from filename)
+df_image_info['file_key'] = df_image_info['filename'].str.replace('_R_', '_').str.replace('.nii.gz', '', regex=False)
+df_mask_info['file_key'] = df_mask_info['filename'].str.replace('_R_', '_').str.replace('.nii.gz', '', regex=False)
+
+vois_combined_info = pd.merge(df_image_info, df_mask_info, on='file_key', suffixes=('_image', '_mask'))
+vois_combined_info.drop(columns=['file_key'], inplace=True)
+print("Combined VOIs information:")
+print(vois_combined_info.head())
+
+# 2. Process Metadata for Diagnosis
+print("\nProcessing metadata for diagnosis...")
+max_voting_diagnosis = process_nodule_metadata(METADATA_FILE)
+print("\nDiagnosis assigned using max-voting:")
+print(max_voting_diagnosis.head())
 
 
-    # 2. Process Metadata for Diagnosis
-    print("\nProcessing metadata for diagnosis...")
-    max_voting_diagnosis = process_nodule_metadata(METADATA_FILE)
-    print("\nDiagnosis assigned using max-voting:")
-    print(max_voting_diagnosis.head())
+# 3. Segmentation Pipeline and Evaluation (Requires external files)
+print("\nAttempting to run segmentation pipeline and evaluation...")
+sys.path.append(str(ASSIGNMENT_DIR))
 
-
-    # 3. Segmentation Pipeline and Evaluation (Requires external files)
-    print("\nAttempting to run segmentation pipeline and evaluation...")
-    sys.path.append(str(ASSIGNMENT_DIR))
-
-    try:
-        from BasicSegmentation import BasicSegmentation
-        from Comparation import comparation
-        print("BasicSegmentation and Comparation modules found.")
-
-        if not vois_combined_info.empty:
-            first_entry = vois_combined_info.iloc[0]
-            
-            # CORRECTED LINES: Use 'filename_image' and 'filename_mask'
-            original_image_path = VOIS_IMAGE_DIR / first_entry['filename_image']
-            original_mask_path = VOIS_MASK_DIR / first_entry['filename_mask']
-
-            try:
-                segmenter = BasicSegmentation(str(original_image_path), data_folder=str(ASSIGNMENT_DIR))
-                
-                segmenter.visualize_original()
-                segmenter.preprocess()
-                pred_mask_data = segmenter.binarize()
-
-                gt_mask_nifti = nib.load(original_mask_path)
-                gt_mask_data = gt_mask_nifti.get_fdata()
-
-                plt.imshow(pred_mask_data[:, :, pred_mask_data.shape[2] // 2], cmap='gray')
-                plt.title('Predicted Binary Mask (Middle Slice)')
-                plt.show()
-
-                segmenter.visualize_morphology_slice(slice_idx=pred_mask_data.shape[2] // 2, se_size=3)
-                segmenter.plot_histogram()
-                segmenter.visualize_segmentation()
-                segmenter.postprocess()
-
-                print("Predicted mask shape:", pred_mask_data.shape)
-                print("Ground Truth mask shape:", gt_mask_data.shape)
-
-                if pred_mask_data.shape != gt_mask_data.shape:
-                    print(f"Warning: Mask shapes differ. Predicted: {pred_mask_data.shape}, Ground Truth: {gt_mask_data.shape}. Resampling might be needed.")
-                
-                results = comparation.segmentation_metrics(pred_mask_data, gt_mask_data)
-
-                for metric, value in results.items():
-                    print(f"{metric}: {value:.4f}")
-
-            except Exception as e:
-                print(f"Error during segmentation or evaluation for {original_image_path}: {e}")
-                print("Please ensure BasicSegmentation and Comparation modules are correctly implemented and can handle the input data.")
-        else:
-            print("No VOIs found to process for segmentation and evaluation.")
-
-    except ImportError as e:
-        print(f"Warning: Missing required modules for segmentation/comparison: {e}")
-        print("Please ensure `BasicSegmentation.py` and `Comparation.py` are in your script's directory or the specified assignment directory.")
-        print("Skipping segmentation pipeline and evaluation.")
-    finally:
-        if str(ASSIGNMENT_DIR) in sys.path:
-            sys.path.remove(str(ASSIGNMENT_DIR))
-
-    # 4. Generate Conceptual Radiomic Feature Visualization
-    print("\n--- Generating Conceptual Radiomic Feature Visualization ---")
-    generate_conceptual_radiomic_viz()
-
-    print("\nMILESTONE 1 workflow completed.")
+if not vois_combined_info.empty:
+    first_entry = vois_combined_info.iloc[0]
     
+    # CORRECTED LINES: Use 'filename_image' and 'filename_mask'
+    original_image_path = VOIS_IMAGE_DIR / first_entry['filename_image']
+    original_mask_path = VOIS_MASK_DIR / first_entry['filename_mask']
+
+segmenter = BasicSegmentation(str(original_image_path), data_folder=str(ASSIGNMENT_DIR))
+
+segmenter.visualize_original()
+segmenter.preprocess()
+pred_mask_data = segmenter.binarize()
+
+gt_mask_nifti = nib.load(original_mask_path)
+gt_mask_data = gt_mask_nifti.get_fdata()
+
+plt.imshow(pred_mask_data[:, :, pred_mask_data.shape[2] // 2], cmap='gray')
+plt.title('Predicted Binary Mask (Middle Slice)')
+plt.show()
+
+segmenter.visualize_morphology_slice(slice_idx=pred_mask_data.shape[2] // 2, se_size=3)
+segmenter.plot_histogram()
+segmenter.visualize_segmentation()
+segmenter.postprocess()
+
+print("Predicted mask shape:", pred_mask_data.shape)
+print("Ground Truth mask shape:", gt_mask_data.shape)
+
+if pred_mask_data.shape != gt_mask_data.shape:
+    print(f"Warning: Mask shapes differ. Predicted: {pred_mask_data.shape}, Ground Truth: {gt_mask_data.shape}. Resampling might be needed.")
+
+results = comparation.segmentation_metrics(pred_mask_data, gt_mask_data)
+
+for metric, value in results.items():
+    print(f"{metric}: {value:.4f}")
+if str(ASSIGNMENT_DIR) in sys.path:
+    sys.path.remove(str(ASSIGNMENT_DIR))
+    
+# 4. Generate Conceptual Radiomic Feature Visualization
+print("\n--- Generating Conceptual Radiomic Feature Visualization ---")
+generate_conceptual_radiomic_viz()
+
+print("\nMILESTONE 1 workflow completed.")  
 
 # ==============================================================================
 # --- MILESTONE 2: DATA EXPLORATION AND CLUSTERING ---
@@ -243,385 +257,354 @@ print("\n--- Milestone 2: Data Exploration and Clustering ---")
 print("Loading data for exploration...")
 
 # Assuming 'MetadatabyNoduleMaxVoting.xlsx' is in the root_folder
-metadata_file_path = METADATA_FILE
-try:
-    df = pd.read_excel(metadata_file_path)
-    print("✅ Data imported! Printing the first 5 elements")
-    print(df.head())
+metadata_file_path = METADATA_FILE  
+df = pd.read_excel(metadata_file_path)
+print("✅ Data imported! Printing the first 5 elements")
+print(df.head())
 
-    # Data Preprocessing for Clustering
-    categorical_cols_to_encode = [
-        'Malignancy', 'Calcification', 'InternalStructure', 'Lobulation',
-        'Margin', 'Sphericity', 'Spiculation', 'Subtlety', 'Texture'
-    ]
+# Data Preprocessing for Clustering
+categorical_cols_to_encode = [
+    'Malignancy', 'Calcification', 'InternalStructure', 'Lobulation',
+    'Margin', 'Sphericity', 'Spiculation', 'Subtlety', 'Texture'
+]
 
-    for col in categorical_cols_to_encode:
-        if col in df.columns:
-            if df[col].dtype == 'object':
-                df[col] = df[col].astype('category')
+for col in categorical_cols_to_encode:
+    if col in df.columns:
+        if df[col].dtype == 'object':
+            df[col] = df[col].astype('category')
 
-    df_encoded = pd.get_dummies(df, columns=categorical_cols_to_encode, prefix=categorical_cols_to_encode)
+df_encoded = pd.get_dummies(df, columns=categorical_cols_to_encode, prefix=categorical_cols_to_encode)
 
-    features_for_clustering = [col for col in df_encoded.columns if
-                               col not in ['patient_id', 'nodule_id', 'seriesuid', 'Diagnosis',
-                                           'Diagnosis_value', 'Malignancy_value', 'len_mal_details'] and
-                               not col.startswith(('coord', 'bbox'))]
+features_for_clustering = [col for col in df_encoded.columns if
+                           col not in ['patient_id', 'nodule_id', 'seriesuid', 'Diagnosis',
+                                       'Diagnosis_value', 'Malignancy_value', 'len_mal_details'] and
+                           not col.startswith(('coord', 'bbox'))]
 
-    if 'diameter_mm' in df_encoded.columns and 'diameter_mm' not in features_for_clustering:
-        features_for_clustering.append('diameter_mm')
+if 'diameter_mm' in df_encoded.columns and 'diameter_mm' not in features_for_clustering:
+    features_for_clustering.append('diameter_mm')
 
-    existing_features = [f for f in features_for_clustering if f in df_encoded.columns]
-    X_clustering = df_encoded[existing_features].copy()
+existing_features = [f for f in features_for_clustering if f in df_encoded.columns]
+X_clustering = df_encoded[existing_features].copy()
 
-    print(f"Features for clustering: {existing_features}")
-    print(X_clustering.head())
+print(f"Features for clustering: {existing_features}")
+print(X_clustering.head())
+
+print("Count of missing values in each column:\n", X_clustering.isnull().sum())
+print("✅ No missing values on the data!")
+
+show_boxplot(X_clustering)
+
+# Standardize the features
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X_clustering)
+X_scaled_df = pd.DataFrame(X_scaled, columns=X_clustering.columns)
+X_scaled_df.head()
+print("Features scaled.")
+
+
+print("\n--- Generating t-SNE Visualization of GLCM Features for Diagnosis ---")
+# Perform t-SNE on the scaled GLCM features
+# Adjust perplexity and n_iter as needed, or for larger datasets
+tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=1000)
+tsne_default = tsne.fit_transform(X_scaled_df)
+
+# Convert t-SNE results into a DataFrame for easy plotting
+tsne_df = pd.DataFrame(tsne_default, columns=['TSNE1', 'TSNE2'])
+# Use the 'Diagnosis' column from df_combined for labels
+tsne_df['Label'] =  df['Diagnosis']
+
+# Plot t-SNE with color coding
+plt.figure(figsize=(10, 6))
+sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
+
+plt.title("t-SNE 2-class Visualization of True Labels", fontsize=16)
+plt.xlabel("TSNE1", fontweight='bold')
+plt.ylabel("TSNE2", fontweight='bold')
+plt.legend(title="Class Label")
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.show()
+
+print("t-SNE visualization generated successfully.")
+print("\n--- Generating t-SNE Visualization of GLCM Features for Malignancy ---")
+# Perform t-SNE on the scaled GLCM features
+# Adjust perplexity and n_iter as needed, or for larger datasets
+tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=1000)
+tsne_default = tsne.fit_transform(X_scaled_df)
+
+# Convert t-SNE results into a DataFrame for easy plotting
+tsne_df = pd.DataFrame(tsne_default, columns=['TSNE1', 'TSNE2'])
+# Use the 'Diagnosis' column from df_combined for labels
+tsne_df['Label'] =  df['Malignancy']
+
+# Plot t-SNE with color coding
+plt.figure(figsize=(10, 6))
+sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
+plt.title("t-SNE 2-class Visualization of True Labels", fontsize=16)
+plt.xlabel("TSNE1", fontweight='bold')
+plt.ylabel("TSNE2", fontweight='bold')
+plt.legend(title="Class Label")
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.show()
+
+df_oh = pd.get_dummies(X_clustering, columns=['Calcification_value', 'InternalStructure_value',
+   'Lobulation_value', 'Margin_value', 'Sphericity_value',
+   'Spiculation_value', 'Subtlety_value', 'Texture_value'], dtype='int32')
+df_oh.head()
+
+tsne_oh = tsne.fit_transform(df_oh)
+# Convert t-SNE results into a DataFrame for easy plotting
+tsne_df = pd.DataFrame(tsne_oh, columns=['TSNE1', 'TSNE2'])
+tsne_df['Label'] = df['Diagnosis']  # Assuming 'Label' is your categorical class column
+
+# Plot t-SNE with color coding
+plt.figure(figsize=(10, 6))
+sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
+
+plt.title(f"t-SNE 2-class Visualization of True labels on one hot encoded features", fontsize=16)
+plt.xlabel("TSNE1", fontweight='bold')
+plt.ylabel("TSNE2", fontweight='bold')
+plt.legend(title="Class Label")
+plt.show()
+
+# Convert t-SNE results into a DataFrame for easy plotting
+tsne_df = pd.DataFrame(tsne_oh, columns=['TSNE1', 'TSNE2'])
+tsne_df['Label'] = df['Malignancy']  # Assuming 'Label' is your categorical class column
+
+# Plot t-SNE with color coding
+plt.figure(figsize=(10, 6))
+sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
+
+plt.title(f"t-SNE 5-class Visualization of True labels on one hot encoded features", fontsize=16)
+plt.xlabel("TSNE1", fontweight='bold')
+plt.ylabel("TSNE2", fontweight='bold')
+plt.legend(title="Class Label")
+plt.show()
+
+# For one hot encoded data
+check_clusters = [2, 5]
+oh_labels_array = []
+for element in check_clusters:
+    c_number = element
+    models = {
+    "K-Means": KMeans(n_clusters=c_number, random_state=42),
+    "Hierarchical (Ward)": AgglomerativeClustering(n_clusters=c_number, linkage='ward'),
+    "Hierarchical (Complete)": AgglomerativeClustering(n_clusters=c_number, linkage='complete'),
+    "Hierarchical (Average)": AgglomerativeClustering(n_clusters=c_number, linkage='average'),
+    "DBSCAN": DBSCAN(eps=0.5, min_samples=5)  # Alternative to HyperDB (Density-based)
+    }
+
+# Store results
+cluster_labels_oh = {}
+silhouette_scores = {}
+
+for name, model in models.items():
+    labels = model.fit_predict(df_oh)
+    cluster_labels_oh[name] = labels
     
-    print("Count of missing values in each column:\n", X_clustering.isnull().sum())
-    print("✅ No missing values on the data!")
+    # Evaluate if clusters are meaningful (skip DBSCAN where n_clusters isn't defined)
+    if name != "DBSCAN":
+        silhouette_scores[name] = silhouette_score(df_oh, labels, metric='manhattan')
+
+# Print results
+print("ONE HOT ENCODED DATA: Silhouette Scores (Higher = Better Clustering) for number of clusters: ", element)
+for name, score in silhouette_scores.items():
+    print(f"{name}: {score:.4f}")
+oh_labels_array.append(cluster_labels_oh)
+
+
+
+# Store results
+cluster_labels_oh = {}
+silhouette_scores = {}
+labels_array = []
+
+for name, model in models.items():
+    labels = model.fit_predict(X_clustering)
+    cluster_labels_oh[name] = labels
     
-    def show_boxplot(df):
-        plt.rcParams['figure.figsize'] = [14,6]
-        sns.boxplot(data = df, orient="v")
-        plt.title("Outliers Distribution", fontsize = 16)
-        plt.ylabel("Range", fontweight = 'bold')
-        plt.xlabel("Attributes", fontweight = 'bold')
-    show_boxplot(X_clustering)
-    
-    # Standardize the features
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_clustering)
-    X_scaled_df = pd.DataFrame(X_scaled, columns=X_clustering.columns)
-    X_scaled_df.head()
-    print("Features scaled.")
-    
-    
-    print("\n--- Generating t-SNE Visualization of GLCM Features for Diagnosis ---")
-    try:
-        # Perform t-SNE on the scaled GLCM features
-        # Adjust perplexity and n_iter as needed, or for larger datasets
-        tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=1000)
-        tsne_default = tsne.fit_transform(X_scaled_df)
+    # Evaluate if clusters are meaningful (skip DBSCAN where n_clusters isn't defined)
+    if name != "DBSCAN":
+        silhouette_scores[name] = silhouette_score(X_clustering, labels, metric='chebyshev')
 
-        # Convert t-SNE results into a DataFrame for easy plotting
-        tsne_df = pd.DataFrame(tsne_default, columns=['TSNE1', 'TSNE2'])
-        # Use the 'Diagnosis' column from df_combined for labels
-        tsne_df['Label'] =  df['Diagnosis']
-
-        # Plot t-SNE with color coding
-        plt.figure(figsize=(10, 6))
-        sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
-
-        plt.title("t-SNE 2-class Visualization of True Labels", fontsize=16)
-        plt.xlabel("TSNE1", fontweight='bold')
-        plt.ylabel("TSNE2", fontweight='bold')
-        plt.legend(title="Class Label")
-        plt.grid(True, linestyle='--', alpha=0.6)
-        plt.show()
-
-        print("t-SNE visualization generated successfully.")
-
-    except Exception as e:
-        print(f"An error occurred during t-SNE visualization: {e}")
-        print("Please ensure 'seaborn' and 'scikit-learn' are installed correctly.")
-        
-    print("\n--- Generating t-SNE Visualization of GLCM Features for Malignancy ---")
-    try:
-        # Perform t-SNE on the scaled GLCM features
-        # Adjust perplexity and n_iter as needed, or for larger datasets
-        tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=1000)
-        tsne_default = tsne.fit_transform(X_scaled_df)
-
-        # Convert t-SNE results into a DataFrame for easy plotting
-        tsne_df = pd.DataFrame(tsne_default, columns=['TSNE1', 'TSNE2'])
-        # Use the 'Diagnosis' column from df_combined for labels
-        tsne_df['Label'] =  df['Malignancy']
-
-        # Plot t-SNE with color coding
-        plt.figure(figsize=(10, 6))
-        sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
-
-        plt.title("t-SNE 2-class Visualization of True Labels", fontsize=16)
-        plt.xlabel("TSNE1", fontweight='bold')
-        plt.ylabel("TSNE2", fontweight='bold')
-        plt.legend(title="Class Label")
-        plt.grid(True, linestyle='--', alpha=0.6)
-        plt.show()
-
-        print("t-SNE visualization generated successfully.")
-
-    except Exception as e:
-        print(f"An error occurred during t-SNE visualization: {e}")
-        print("Please ensure 'seaborn' and 'scikit-learn' are installed correctly.")
-    
-    df_oh = pd.get_dummies(X_clustering, columns=['Calcification_value', 'InternalStructure_value',
-       'Lobulation_value', 'Margin_value', 'Sphericity_value',
-       'Spiculation_value', 'Subtlety_value', 'Texture_value'], dtype='int32')
-    df_oh.head()
-    
-    tsne_oh = tsne.fit_transform(df_oh)
-    # Convert t-SNE results into a DataFrame for easy plotting
-    tsne_df = pd.DataFrame(tsne_oh, columns=['TSNE1', 'TSNE2'])
-    tsne_df['Label'] = df['Diagnosis']  # Assuming 'Label' is your categorical class column
-
-    # Plot t-SNE with color coding
-    plt.figure(figsize=(10, 6))
-    sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
-
-    plt.title(f"t-SNE 2-class Visualization of True labels on one hot encoded features", fontsize=16)
-    plt.xlabel("TSNE1", fontweight='bold')
-    plt.ylabel("TSNE2", fontweight='bold')
-    plt.legend(title="Class Label")
-    plt.show()
-    
-    # Convert t-SNE results into a DataFrame for easy plotting
-    tsne_df = pd.DataFrame(tsne_oh, columns=['TSNE1', 'TSNE2'])
-    tsne_df['Label'] = df['Malignancy']  # Assuming 'Label' is your categorical class column
-
-    # Plot t-SNE with color coding
-    plt.figure(figsize=(10, 6))
-    sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
-
-    plt.title(f"t-SNE 5-class Visualization of True labels on one hot encoded features", fontsize=16)
-    plt.xlabel("TSNE1", fontweight='bold')
-    plt.ylabel("TSNE2", fontweight='bold')
-    plt.legend(title="Class Label")
-    plt.show()
-
-    # For one hot encoded data
-    check_clusters = [2, 5]
-    oh_labels_array = []
-    for element in check_clusters:
-        c_number = element
-        models = {
-        "K-Means": KMeans(n_clusters=c_number, random_state=42),
-        "Hierarchical (Ward)": AgglomerativeClustering(n_clusters=c_number, linkage='ward'),
-        "Hierarchical (Complete)": AgglomerativeClustering(n_clusters=c_number, linkage='complete'),
-        "Hierarchical (Average)": AgglomerativeClustering(n_clusters=c_number, linkage='average'),
-        "DBSCAN": DBSCAN(eps=0.5, min_samples=5)  # Alternative to HyperDB (Density-based)
-        }
-
-    # Store results
-    cluster_labels_oh = {}
-    silhouette_scores = {}
-
-    for name, model in models.items():
-        labels = model.fit_predict(df_oh)
-        cluster_labels_oh[name] = labels
-        
-        # Evaluate if clusters are meaningful (skip DBSCAN where n_clusters isn't defined)
-        if name != "DBSCAN":
-            silhouette_scores[name] = silhouette_score(df_oh, labels, metric='manhattan')
-
-    # Print results
-    print("ONE HOT ENCODED DATA: Silhouette Scores (Higher = Better Clustering) for number of clusters: ", element)
-    for name, score in silhouette_scores.items():
-        print(f"{name}: {score:.4f}")
-    oh_labels_array.append(cluster_labels_oh)
-    
+# Print results
+print("NON-ONE HOT ENCODED DATA: Silhouette Scores (Higher = Better Clustering) for number of clusters: ", element)
+for name, score in silhouette_scores.items():
+    print(f"{name}: {score:.4f}")
+labels_array.append(cluster_labels_oh)
 
 
-    # Store results
-    cluster_labels_oh = {}
-    silhouette_scores = {}
-    labels_array = []
+#Visualizing unsupervised clustering results on the T-SNE graph using one hot encoded, 5 clusters
+method = 'Hierarchical (Complete)'
+# Convert t-SNE results into a DataFrame for easy plotting
+tsne_df = pd.DataFrame(tsne_oh, columns=['TSNE1', 'TSNE2'])
+tsne_df['Label'] = oh_labels_array[1][method]  # Assuming 'Label' is your categorical class column
 
-    for name, model in models.items():
-        labels = model.fit_predict(X_clustering)
-        cluster_labels_oh[name] = labels
-        
-        # Evaluate if clusters are meaningful (skip DBSCAN where n_clusters isn't defined)
-        if name != "DBSCAN":
-            silhouette_scores[name] = silhouette_score(X_clustering, labels, metric='chebyshev')
+# Plot t-SNE with color coding
+plt.figure(figsize=(10, 6))
+sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
 
-    # Print results
-    print("NON-ONE HOT ENCODED DATA: Silhouette Scores (Higher = Better Clustering) for number of clusters: ", element)
-    for name, score in silhouette_scores.items():
-        print(f"{name}: {score:.4f}")
-    labels_array.append(cluster_labels_oh)
-    
-    oh_labels_array[1]
-    #Visualizing unsupervised clustering results on the T-SNE graph using one hot encoded, 5 clusters
-    method = 'Hierarchical (Complete)'
-    # Convert t-SNE results into a DataFrame for easy plotting
-    tsne_df = pd.DataFrame(tsne_oh, columns=['TSNE1', 'TSNE2'])
-    tsne_df['Label'] = oh_labels_array[1][method]  # Assuming 'Label' is your categorical class column
+plt.title(f"t-SNE 5-class Visualization one hot data {method} clustering", fontsize=16)
+plt.xlabel("TSNE1", fontweight='bold')
+plt.ylabel("TSNE2", fontweight='bold')
+plt.legend(title="Class Label")
+plt.show()
 
-    # Plot t-SNE with color coding
-    plt.figure(figsize=(10, 6))
-    sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
+#Non one-hot encoded data, 2 clusters
+# Convert t-SNE results into a DataFrame for easy plotting
+method = "Hierarchical (Average)"
+tsne_df = pd.DataFrame(tsne_default, columns=['TSNE1', 'TSNE2'])
+tsne_df['Label'] = labels_array[0][method]  # Assuming 'Label' is your categorical class column
 
-    plt.title(f"t-SNE 5-class Visualization one hot data {method} clustering", fontsize=16)
-    plt.xlabel("TSNE1", fontweight='bold')
-    plt.ylabel("TSNE2", fontweight='bold')
-    plt.legend(title="Class Label")
-    plt.show()
-    
-    #Non one-hot encoded data, 2 clusters
-    # Convert t-SNE results into a DataFrame for easy plotting
-    method = "Hierarchical (Average)"
-    tsne_df = pd.DataFrame(tsne_default, columns=['TSNE1', 'TSNE2'])
-    tsne_df['Label'] = labels_array[0][method]  # Assuming 'Label' is your categorical class column
+# Plot t-SNE with color coding
+plt.figure(figsize=(10, 6))
+sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
 
-    # Plot t-SNE with color coding
-    plt.figure(figsize=(10, 6))
-    sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
+plt.title(f"t-SNE 2-class Visualization Non one hot data {method}", fontsize=16)
+plt.xlabel("TSNE1", fontweight='bold')
+plt.ylabel("TSNE2", fontweight='bold')
+plt.legend(title="Class Label")
+plt.show()
 
-    plt.title(f"t-SNE 2-class Visualization Non one hot data {method}", fontsize=16)
-    plt.xlabel("TSNE1", fontweight='bold')
-    plt.ylabel("TSNE2", fontweight='bold')
-    plt.legend(title="Class Label")
-    plt.show()
-    
-    # Convert t-SNE results into a DataFrame for easy plotting
-    method = "K-Means"
-    tsne_df = pd.DataFrame(tsne_default, columns=['TSNE1', 'TSNE2'])
-    tsne_df['Label'] = labels_array[1][method]  # Assuming 'Label' is your categorical class column
+# Convert t-SNE results into a DataFrame for easy plotting
+method = "K-Means"
+tsne_df = pd.DataFrame(tsne_default, columns=['TSNE1', 'TSNE2'])
+tsne_df['Label'] = labels_array[1][method]  # Assuming 'Label' is your categorical class column
 
-    # Plot t-SNE with color coding
-    plt.figure(figsize=(10, 6))
-    sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
+# Plot t-SNE with color coding
+plt.figure(figsize=(10, 6))
+sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
 
-    plt.title(f"t-SNE 5-class Visualization Non one hot data {method}", fontsize=16)
-    plt.xlabel("TSNE1", fontweight='bold')
-    plt.ylabel("TSNE2", fontweight='bold')
-    plt.legend(title="Class Label")
-    plt.show()
+plt.title(f"t-SNE 5-class Visualization Non one hot data {method}", fontsize=16)
+plt.xlabel("TSNE1", fontweight='bold')
+plt.ylabel("TSNE2", fontweight='bold')
+plt.legend(title="Class Label")
+plt.show()
 
-    # Hierarchical Clustering (Dendrogram) WARD
-    print("Dendrogram generated.")
-    print("\nGenerating Hierarchical Clustering Dendrogram with method = ward...")
-    plt.figure(figsize=(20, 10))
-    linked = linkage(X_scaled, method='ward')
-    dendrogram(linked, orientation='top', distance_sort='descending', show_leaf_counts=True)
-    plt.title('Hierarchical Clustering Dendrogram')
-    plt.xlabel('Sample Index')
-    plt.ylabel('Distance')
-    plt.show()
-    print("Dendrogram generated.")
-    
-    # Hierarchical Clustering (Dendrogram) AVERAGE   
-    print("\nGenerating Hierarchical Clustering Dendrogram with method = average...")
-    plt.figure(figsize=(20, 10))
-    linked = linkage(X_scaled, method='average')
-    dendrogram(linked, orientation='top', distance_sort='descending', show_leaf_counts=True)
-    plt.title('Hierarchical Clustering Dendrogram')
-    plt.xlabel('Sample Index')
-    plt.ylabel('Distance')
-    plt.show()
-    print("Dendrogram generated.")
-    
-    # Hierarchical Clustering (Dendrogram) COMPLETE   
-    print("\nGenerating Hierarchical Clustering Dendrogram with method = complete...")
-    plt.figure(figsize=(20, 10))
-    linked = linkage(X_scaled, method='complete')
-    dendrogram(linked, orientation='top', distance_sort='descending', show_leaf_counts=True)
-    plt.title('Hierarchical Clustering Dendrogram')
-    plt.xlabel('Sample Index')
-    plt.ylabel('Distance')
-    plt.show()
-    print("Dendrogram generated.")
-    
-    # Hierarchical Clustering (Dendrogram) SINGLE   
-    print("\nGenerating Hierarchical Clustering Dendrogram with method = single...")
-    plt.figure(figsize=(20, 10))
-    linked = linkage(X_scaled, method='single')
-    dendrogram(linked, orientation='top', distance_sort='descending', show_leaf_counts=True)
-    plt.title('Hierarchical Clustering Dendrogram')
-    plt.xlabel('Sample Index')
-    plt.ylabel('Distance')
-    plt.show()
-    print("Dendrogram generated.")
+# Hierarchical Clustering (Dendrogram) WARD
+print("Dendrogram generated.")
+print("\nGenerating Hierarchical Clustering Dendrogram with method = ward...")
+plt.figure(figsize=(20, 10))
+linked = linkage(X_scaled, method='ward')
+dendrogram(linked, orientation='top', distance_sort='descending', show_leaf_counts=True)
+plt.title('Hierarchical Clustering Dendrogram')
+plt.xlabel('Sample Index')
+plt.ylabel('Distance')
+plt.show()
+print("Dendrogram generated.")
 
-    # K-Means Clustering
-    print("\nPerforming K-Means Clustering...")
-    silhouette_scores = []
-    k_range = range(2, 11)
-    for k in k_range:
-        kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
-        cluster_labels = kmeans.fit_predict(X_scaled)
-        if len(set(cluster_labels)) > 1:
-            score = silhouette_score(X_scaled, cluster_labels)
-            silhouette_scores.append(score)
-        else:
-            silhouette_scores.append(0)
+# Hierarchical Clustering (Dendrogram) AVERAGE   
+print("\nGenerating Hierarchical Clustering Dendrogram with method = average...")
+plt.figure(figsize=(20, 10))
+linked = linkage(X_scaled, method='average')
+dendrogram(linked, orientation='top', distance_sort='descending', show_leaf_counts=True)
+plt.title('Hierarchical Clustering Dendrogram')
+plt.xlabel('Sample Index')
+plt.ylabel('Distance')
+plt.show()
+print("Dendrogram generated.")
 
-    plt.figure(figsize=(10, 6))
-    plt.plot(k_range, silhouette_scores, marker='o')
-    plt.title('Silhouette Score for K-Means Clustering')
-    plt.xlabel('Number of Clusters (k)')
-    plt.ylabel('Silhouette Score')
-    plt.show()
+# Hierarchical Clustering (Dendrogram) COMPLETE   
+print("\nGenerating Hierarchical Clustering Dendrogram with method = complete...")
+plt.figure(figsize=(20, 10))
+linked = linkage(X_scaled, method='complete')
+dendrogram(linked, orientation='top', distance_sort='descending', show_leaf_counts=True)
+plt.title('Hierarchical Clustering Dendrogram')
+plt.xlabel('Sample Index')
+plt.ylabel('Distance')
+plt.show()
+print("Dendrogram generated.")
 
-    optimal_k = 3 # Example, choose based on plot
-    kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init=10)
-    df['kmeans_cluster'] = kmeans.fit_predict(X_scaled)
-    print(f"K-Means clustering performed with k={optimal_k}. Cluster distribution:")
-    print(df['kmeans_cluster'].value_counts())
+# Hierarchical Clustering (Dendrogram) SINGLE   
+print("\nGenerating Hierarchical Clustering Dendrogram with method = single...")
+plt.figure(figsize=(20, 10))
+linked = linkage(X_scaled, method='single')
+dendrogram(linked, orientation='top', distance_sort='descending', show_leaf_counts=True)
+plt.title('Hierarchical Clustering Dendrogram')
+plt.xlabel('Sample Index')
+plt.ylabel('Distance')
+plt.show()
+print("Dendrogram generated.")
 
-    # Correlation Analysis
-    print("\nPerforming Correlation Analysis...")
-    if 'Diagnosis_value' in df.columns and 'Malignancy_value' in df.columns:
-        numerical_df = df.select_dtypes(include=np.number)
-        corr_matrix = numerical_df.corr()
-
-        diagnosis_corr = corr_matrix['Diagnosis_value'].sort_values(ascending=False)
-        print("\nCorrelation with Diagnosis_value:")
-        print(diagnosis_corr)
-
-        malig_corr = corr_matrix['Malignancy_value'].sort_values(ascending=False)
-        print("\nCorrelation with Malignancy_value:")
-        print(malig_corr)
-
-        if 'Diagnosis_value' in df_encoded.columns and 'Malignancy_value' in df_encoded.columns:
-            corr_matrix_oh = df_encoded.select_dtypes(include=np.number).corr()
-            diagnosis_corr_oh = corr_matrix_oh['Diagnosis_value'].sort_values(ascending=False)
-            print("\nCorrelation with Diagnosis_value (One-Hot Encoded Features):")
-            print(diagnosis_corr_oh)
-            
-
-            malig_corr_oh = corr_matrix_oh['Malignancy_value'].sort_values(ascending=False)
-            print("\nCorrelation with Malignancy_value (One-Hot Encoded Features):")
-            print(malig_corr_oh)
-            
-            # Plot the heatmap
-            print("\n Printing the heatmap with the correlations...")
-            sns.heatmap(corr_matrix, 
-                        cmap='coolwarm', 
-                        annot=True, 
-                        fmt=".2f", 
-                        square=True,
-                        cbar_kws={"shrink": 0.8},
-                        linewidths=0.5)
-            plt.title("Correlation Matrix Heatmap")
-            plt.tight_layout()
-            plt.show()
-            
-            # Correlations amtrix with one hot encoding
-            # Compute correlation of all annotations with the diagnosis column
-            df_oh["Diagnosis_value"] = df["Diagnosis_value"]
-            df_oh["Malignancy_value"]= df["Malignancy_value"]
-            corr_matrix = df_oh.corr()
-
-            # Extract correlations only for the "Diagnosis" column
-            diagnosis_corr_oh = corr_matrix["Diagnosis_value"].sort_values(ascending=False)
-
-            # Display the correlation values
-            print("\n Printing correlations of Diagnosis with oen hot encoding data...")
-            print(diagnosis_corr_oh)
-            malig_corr_oh = corr_matrix["Malignancy_value"].sort_values(ascending=False)
-            print("\n Printing correlations of Malignancy with oen hot encoding data...")
-            print(malig_corr_oh)
-        
-            
+# K-Means Clustering
+print("\nPerforming K-Means Clustering...")
+silhouette_scores = []
+k_range = range(2, 11)
+for k in k_range:
+    kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+    cluster_labels = kmeans.fit_predict(X_scaled)
+    if len(set(cluster_labels)) > 1:
+        score = silhouette_score(X_scaled, cluster_labels)
+        silhouette_scores.append(score)
     else:
-        print("Diagnosis_value or Malignancy_value not found for correlation analysis.")
+        silhouette_scores.append(0)
 
-    
+plt.figure(figsize=(10, 6))
+plt.plot(k_range, silhouette_scores, marker='o')
+plt.title('Silhouette Score for K-Means Clustering')
+plt.xlabel('Number of Clusters (k)')
+plt.ylabel('Silhouette Score')
+plt.show()
 
-except FileNotFoundError:
-    print(f"Error: Metadata file for Milestone 2 not found at {metadata_file_path}. Please ensure the file exists.")
-except Exception as e:
-    print(f"An error occurred during Milestone 2 data exploration: {e}")
+optimal_k = 7 # Example, choose based on plot
+kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init=10)
+df['kmeans_cluster'] = kmeans.fit_predict(X_scaled)
+print(f"K-Means clustering performed with k={optimal_k}. Cluster distribution:")
+print(df['kmeans_cluster'].value_counts())
+
+# Correlation Analysis
+print("\nPerforming Correlation Analysis...")
+if 'Diagnosis_value' in df.columns and 'Malignancy_value' in df.columns:
+    numerical_df = df.select_dtypes(include=np.number)
+    corr_matrix = numerical_df.corr()
+
+    diagnosis_corr = corr_matrix['Diagnosis_value'].sort_values(ascending=False)
+    print("\nCorrelation with Diagnosis_value:")
+    print(diagnosis_corr)
+
+    malig_corr = corr_matrix['Malignancy_value'].sort_values(ascending=False)
+    print("\nCorrelation with Malignancy_value:")
+    print(malig_corr)
+
+    if 'Diagnosis_value' in df_encoded.columns and 'Malignancy_value' in df_encoded.columns:
+        corr_matrix_oh = df_encoded.select_dtypes(include=np.number).corr()
+        diagnosis_corr_oh = corr_matrix_oh['Diagnosis_value'].sort_values(ascending=False)
+        print("\nCorrelation with Diagnosis_value (One-Hot Encoded Features):")
+        print(diagnosis_corr_oh)
+        
+
+        malig_corr_oh = corr_matrix_oh['Malignancy_value'].sort_values(ascending=False)
+        print("\nCorrelation with Malignancy_value (One-Hot Encoded Features):")
+        print(malig_corr_oh)
+        
+        # Plot the heatmap
+        print("\n Printing the heatmap with the correlations...")
+        sns.heatmap(corr_matrix_oh, 
+                    cmap='coolwarm', 
+                    annot=True, 
+                    fmt=".2f", 
+                    square=True,
+                    cbar_kws={"shrink": 0.8},
+                    linewidths=0.5)
+        plt.title("Correlation Matrix Heatmap")
+        plt.tight_layout()
+        plt.show()
+        
+        # Correlations matrix with one hot encoding
+        # Compute correlation of all annotations with the diagnosis column
+        df_oh["Diagnosis_value"] = df["Diagnosis_value"]
+        df_oh["Malignancy_value"]= df["Malignancy_value"]
+        corr_matrix = df_oh.corr()
+
+        # Extract correlations only for the "Diagnosis" column
+        diagnosis_corr_oh = corr_matrix["Diagnosis_value"].sort_values(ascending=False)
+
+        # Display the correlation values
+        print("\n Printing correlations of Diagnosis with oen hot encoding data...")
+        print(diagnosis_corr_oh)
+        malig_corr_oh = corr_matrix["Malignancy_value"].sort_values(ascending=False)
+        print("\n Printing correlations of Malignancy with oen hot encoding data...")
+        print(malig_corr_oh)        
+    print("t-SNE visualization generated successfully.")
 
 # ==============================================================================
 # --- MILESTONE 3: TRAINING A CLASSIFIER ON GLCM FEATURES ---
@@ -631,96 +614,451 @@ print("\n--- Milestone 3: Training a Classifier on GLCM Features ---")
 
 # Define the base directory where slice_glcm1d.npz is located
 GLCM_FILE_PATH = BASE_DOWNLOADS_DIR / "slice_glcm1d.npz"
-
 print(f"Loading GLCM data from '{GLCM_FILE_PATH}'...")
-try:
-    data = np.load(GLCM_FILE_PATH, allow_pickle=True) # Use the full path here
-    print(f"Data files in npz: {data.files}")
+data = np.load(GLCM_FILE_PATH, allow_pickle=True) # Use the full path here
+print(f"Data files in npz: {data.files}")
 
-    df_features = pd.DataFrame(data['slice_features'])
-    df_meta = pd.DataFrame(data['slice_meta'])
+df_features = pd.DataFrame(data['slice_features'])
+df_meta = pd.DataFrame(data['slice_meta'], columns=['filename', 'patient_id', 'nodule_id', 'diagnosis'])
 
-    print("GLCM Features (first 5 rows):")
-    print(df_features.head())
-    print("GLCM Metadata (first 5 rows):")
-    print(df_meta.head())
+print("GLCM Features (first 5 rows):")
+print(df_features.head())
+print("GLCM Metadata (first 5 rows):")
+print(df_meta.head())
 
-    if 'label' in df_meta.columns:
-        y = df_meta['label'].values
-        print(f"Target variable 'label' unique values: {np.unique(y)}")
-    else:
-        print("Warning: 'label' column not found in GLCM metadata. Please ensure target variable is correctly identified.")
-        y = np.zeros(len(df_features))
+labels = df_meta['diagnosis']
+print("GLCM Metadata labels (first 5 rows):")
+print(labels.head())
+print(f"Shape of df_meta: {df_meta.shape}")
 
-    X = df_features.values
-    print(f"Shape of features (X): {X.shape}")
-    print(f"Shape of target (y): {y.shape}")
+#Let's get rif of NoNods
+df_binary = df_features[labels != 'NoNod']
+print("Features without NoNod")
+df_binary.head()
+print(f"Shape of labels withou NoNod: {df_binary.shape}")
+filt_nonod = df_meta[df_meta['diagnosis'] != 'NoNod']
+print(f"Shape of df_meta without labels = NoNod: {filt_nonod.shape}")
+labels = filt_nonod['diagnosis']
 
-    # Data Preprocessing (Standardization)
-    scaler = StandardScaler()
-    X_scaled_glcm = scaler.fit_transform(X)
-    print("GLCM features scaled.")
+#Performing the T-test for feature importance
+class_0 = df_binary[labels == 'Benign']  # Subset where class is 0
+class_1 = df_binary[labels == 'Malignant']  # Subset where class is 1
+# Perform t-test for each feature
+p_values = {col: ttest_ind(class_0[col], class_1[col], equal_var=True).pvalue for col in df_features.columns}
+# Convert results to DataFrame
+feature_importance = pd.DataFrame.from_dict(p_values, orient='index', columns=['p_value'])
+# Sort by significance
+feature_importance = feature_importance.sort_values(by='p_value')
+print("Printing the 24 first most important features", feature_importance.head(24))  # Features with the smallest p-values
 
-    # Stratified Group K-Fold for Cross-Validation
-    if 'seriesuid' in df_meta.columns:
-        groups = df_meta['seriesuid'].values
-        print(f"Groups for cross-validation based on 'seriesuid': {len(np.unique(groups))} unique groups.")
-        sgkf = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)
-    else:
-        print("Warning: 'seriesuid' (or patient_id) not found for StratifiedGroupKFold. Using StratifiedKFold instead.")
-        sgkf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-        groups = None
+#We filter out the p-values > 0.05
+important_features = feature_importance[feature_importance < 0.05]
+important_features = important_features.dropna()
+print(f"Shape of most important features: {important_features.shape}")
+print(important_features.head())
 
-    # Model: Support Vector Classifier
-    svc = SVC(random_state=42)
+df_binary_imp = df_binary[important_features.index]
 
-    # Randomized Search for Hyperparameter Tuning
-    print("\nPerforming Randomized Search for SVC hyperparameters...")
-    param_distributions = {
-        'C': loguniform(1e-1, 1e2),
-        'gamma': loguniform(1e-4, 1e-1),
-        'kernel': ['rbf', 'linear']
-    }
+#Training SVM on Stratified K-Fold
+cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
+model_base = SVC(class_weight='balanced')
+scoring = {
+    'accuracy': 'accuracy',
+    'precision_malignant': make_scorer(precision_score, pos_label='Malignant'),
+    'recall_malignant': make_scorer(recall_score, pos_label='Malignant'),
+    'f1_malignant': make_scorer(f1_score, pos_label='Malignant'),
+    'precision_benign': make_scorer(precision_score, pos_label='Benign'),
+    'recall_benign': make_scorer(recall_score, pos_label='Benign'),
+    'f1_benign': make_scorer(f1_score, pos_label='Benign')
+}
 
-    random_search = RandomizedSearchCV(svc, param_distributions, n_iter=100, cv=sgkf,
-                                       scoring='accuracy', random_state=42, n_jobs=-1, verbose=1)
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(df_binary_imp)
 
-    random_search.fit(X_scaled_glcm, y, groups=groups if groups is not None else None)
+# Run cross-validation
+results = cross_validate(
+    model_base,
+    X_scaled,
+    labels,
+    cv=cv,
+    scoring=scoring,
+    n_jobs=-1
+)
 
-    print(f"Best parameters from Randomized Search: {random_search.best_params_}")
-    print(f"Best cross-validation accuracy from Randomized Search: {random_search.best_score_:.4f}")
+# Print full results
+print("\n=== Detailed Metrics Per Fold ===")
+for fold in range(10):
+    print(f"\nFold {fold + 1}:")
+    print(f"  Accuracy: {results['test_accuracy'][fold]:.4f}")
+    print("  Malignant:")
+    print(f"    Precision: {results['test_precision_malignant'][fold]:.4f}")
+    print(f"    Recall: {results['test_recall_malignant'][fold]:.4f}")
+    print(f"    F1: {results['test_f1_malignant'][fold]:.4f}")
+    print("  Benign:")
+    print(f"    Precision: {results['test_precision_benign'][fold]:.4f}")
+    print(f"    Recall: {results['test_recall_benign'][fold]:.4f}")
+    print(f"    F1: {results['test_f1_benign'][fold]:.4f}")
 
-    best_svc_random = random_search.best_estimator_
+# Print averages
+print("\n=== Average Metrics ===")
+print(f"Accuracy: {np.mean(results['test_accuracy']):.4f} (±{np.std(results['test_accuracy']):.4f})")
+print("\nMalignant:")
+print(f"  Precision: {np.mean(results['test_precision_malignant']):.4f} (±{np.std(results['test_precision_malignant']):.4f})")
+print(f"  Recall: {np.mean(results['test_recall_malignant']):.4f} (±{np.std(results['test_recall_malignant']):.4f})")
+print(f"  F1: {np.mean(results['test_f1_malignant']):.4f} (±{np.std(results['test_f1_malignant']):.4f})")
+print("\nBenign:")
+print(f"  Precision: {np.mean(results['test_precision_benign']):.4f} (±{np.std(results['test_precision_benign']):.4f})")
+print(f"  Recall: {np.mean(results['test_recall_benign']):.4f} (±{np.std(results['test_recall_benign']):.4f})")
+print(f"  F1: {np.mean(results['test_f1_benign']):.4f} (±{np.std(results['test_f1_benign']):.4f})")
 
-    # Cross-validation with best estimator
-    print("\nPerforming Cross-Validation with the best SVC estimator...")
-    scoring = {
-        'accuracy': make_scorer(accuracy_score),
-        'precision': make_scorer(precision_score, average='binary'),
-        'recall': make_scorer(recall_score, average='binary'),
-        'f1': make_scorer(f1_score, average='binary')
-    }
+# Extract cross-validation scores
+cv_scores = results['test_accuracy']
 
-    results = cross_validate(best_svc_random, X_scaled_glcm, y, cv=sgkf,
-                             scoring=scoring, n_jobs=-1, return_train_score=False,
-                             groups=groups if groups is not None else None)
+# Compute mean and standard error
+mean_score = np.mean(cv_scores)
+std_error = st.sem(cv_scores)  # Standard Error of the Mean (SEM)
 
-    print("\nCross-Validation Results:")
-    for metric, values in results.items():
-        if metric.startswith('test_'):
-            print(f"{metric.replace('test_', '').capitalize()} (Mean +/- Std): {np.mean(values):.4f} +/- {np.std(values):.4f}")
+# Calculate confidence interval
+confidence = 0.95
+ci_lower, ci_upper = st.t.interval(confidence, len(cv_scores)-1, loc=mean_score, scale=std_error)
 
-    cv_scores = results['test_accuracy']
-    mean_score = np.mean(cv_scores)
-    std_error = st.sem(cv_scores)
-    confidence = 0.95
-    ci_lower, ci_upper = st.t.interval(confidence, len(cv_scores)-1, loc=mean_score, scale=std_error)
+print(f"Mean Score: {mean_score:.4f}")
+print(f"95% Confidence Interval: ({ci_lower:.4f}, {ci_upper:.4f})")
 
-    print(f"Mean Score: {mean_score:.4f}")
-    print(f"95% Confidence Interval: ({ci_lower:.4f}, {ci_upper:.4f})")
-    print("The metrics are quite similar to the random search.")
+#Grouping by the file name
+nodules = filt_nonod["filename"]
+print(f"Length of the nodules when grouping by file name: {len(nodules)}")
+print(f"Length of the labels: {len(labels)}")
 
-except FileNotFoundError:
-    print(f"Error: '{GLCM_FILE_PATH}' not found. This file is required for Milestone 3 classifier training.")
-except Exception as e:
-    print(f"An error occurred during Milestone 3 classifier training: {e}")
+#Training SVM on Stratified Group K-Fold
+cv = StratifiedGroupKFold(n_splits=10, shuffle=True, random_state=42)
+model_base = SVC(class_weight='balanced')
+scoring = {
+    'accuracy': 'accuracy',
+    'precision_malignant': make_scorer(precision_score, pos_label='Malignant'),
+    'recall_malignant': make_scorer(recall_score, pos_label='Malignant'),
+    'f1_malignant': make_scorer(f1_score, pos_label='Malignant'),
+    'precision_benign': make_scorer(precision_score, pos_label='Benign'),
+    'recall_benign': make_scorer(recall_score, pos_label='Benign'),
+    'f1_benign': make_scorer(f1_score, pos_label='Benign')
+}
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(df_binary_imp)
+
+# Run cross-validation
+results = cross_validate(
+    model_base,
+    X_scaled,
+    labels,
+    cv=cv,
+    scoring=scoring,
+    groups=nodules,
+    n_jobs=-1
+)
+
+# Print full results
+print("\n=== Detailed Metrics Per Fold ===")
+for fold in range(10):
+    print(f"\nFold {fold + 1}:")
+    print(f"  Accuracy: {results['test_accuracy'][fold]:.4f}")
+    print("  Malignant:")
+    print(f"    Precision: {results['test_precision_malignant'][fold]:.4f}")
+    print(f"    Recall: {results['test_recall_malignant'][fold]:.4f}")
+    print(f"    F1: {results['test_f1_malignant'][fold]:.4f}")
+    print("  Benign:")
+    print(f"    Precision: {results['test_precision_benign'][fold]:.4f}")
+    print(f"    Recall: {results['test_recall_benign'][fold]:.4f}")
+    print(f"    F1: {results['test_f1_benign'][fold]:.4f}")
+
+# Print averages
+print("\n=== Average Metrics ===")
+print(f"Accuracy: {np.mean(results['test_accuracy']):.4f} (±{np.std(results['test_accuracy']):.4f})")
+print("\nMalignant:")
+print(f"  Precision: {np.mean(results['test_precision_malignant']):.4f} (±{np.std(results['test_precision_malignant']):.4f})")
+print(f"  Recall: {np.mean(results['test_recall_malignant']):.4f} (±{np.std(results['test_recall_malignant']):.4f})")
+print(f"  F1: {np.mean(results['test_f1_malignant']):.4f} (±{np.std(results['test_f1_malignant']):.4f})")
+print("\nBenign:")
+print(f"  Precision: {np.mean(results['test_precision_benign']):.4f} (±{np.std(results['test_precision_benign']):.4f})")
+print(f"  Recall: {np.mean(results['test_recall_benign']):.4f} (±{np.std(results['test_recall_benign']):.4f})")
+print(f"  F1: {np.mean(results['test_f1_benign']):.4f} (±{np.std(results['test_f1_benign']):.4f})")
+
+# Extract cross-validation scores
+cv_scores = results['test_accuracy']
+
+# Compute mean and standard error
+mean_score = np.mean(cv_scores)
+std_error = st.sem(cv_scores)  # Standard Error of the Mean (SEM)
+
+# Calculate confidence interval
+confidence = 0.95
+ci_lower, ci_upper = st.t.interval(confidence, len(cv_scores)-1, loc=mean_score, scale=std_error)
+
+print(f"Mean Score: {mean_score:.4f}")
+print(f"95% Confidence Interval: ({ci_lower:.4f}, {ci_upper:.4f})")
+
+#Hyperparameter tuning
+#Grid search
+cv_outer = StratifiedGroupKFold(n_splits=10)
+cv_inner = StratifiedGroupKFold(n_splits=10)
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(df_binary_imp)
+
+# Define parameter grid
+param_grid = {
+    'svc__C': [0.01, 0.1, 1, 10, 100],
+    'svc__kernel': ['linear', 'rbf'],
+    'svc__gamma': ['scale', 'auto']
+}
+
+metrics = []
+
+pipeline = Pipeline([('scaler', StandardScaler()), ('svc', SVC(class_weight='balanced'))])
+
+# Initialize grid search with cv_inner
+grid_search = GridSearchCV(
+    pipeline,
+    param_grid,
+    cv=cv_inner,  # Inner CV for hyperparameter tuning
+    scoring='accuracy',
+    n_jobs=-1,
+    refit=True, # Refit the best model on the full dataset
+    verbose = 1  # get some intermediate info about the training
+)
+
+# Fit on ALL data (handles train/test splits internally)
+grid_search.fit(df_binary_imp, labels, groups=nodules)
+
+# Best model and params
+print("Best params:", grid_search.best_params_)
+best_model = grid_search.best_estimator_
+best_model = SVC(C=0.01, gamma='scale',kernel='linear', class_weight='balanced')
+scoring = {
+    'accuracy': 'accuracy',
+    'precision_malignant': make_scorer(precision_score, pos_label='Malignant'),
+    'recall_malignant': make_scorer(recall_score, pos_label='Malignant'),
+    'f1_malignant': make_scorer(f1_score, pos_label='Malignant'),
+    'precision_benign': make_scorer(precision_score, pos_label='Benign'),
+    'recall_benign': make_scorer(recall_score, pos_label='Benign'),
+    'f1_benign': make_scorer(f1_score, pos_label='Benign')
+}
+
+# Run cross-validation
+results = cross_validate(
+    best_model,
+    X_scaled,
+    labels,
+    cv=cv_outer,
+    groups=nodules,
+    scoring=scoring,
+    n_jobs=-1
+)
+
+# Print full results
+print("\n=== Detailed Metrics Per Fold ===")
+for fold in range(10):
+    print(f"\nFold {fold + 1}:")
+    print(f"  Accuracy: {results['test_accuracy'][fold]:.4f}")
+    print("  Malignant:")
+    print(f"    Precision: {results['test_precision_malignant'][fold]:.4f}")
+    print(f"    Recall: {results['test_recall_malignant'][fold]:.4f}")
+    print(f"    F1: {results['test_f1_malignant'][fold]:.4f}")
+    print("  Benign:")
+    print(f"    Precision: {results['test_precision_benign'][fold]:.4f}")
+    print(f"    Recall: {results['test_recall_benign'][fold]:.4f}")
+    print(f"    F1: {results['test_f1_benign'][fold]:.4f}")
+
+# Print averages
+print("\n=== Average Metrics ===")
+print(f"Accuracy: {np.mean(results['test_accuracy']):.4f} (±{np.std(results['test_accuracy']):.4f})")
+print("\nMalignant:")
+print(f"  Precision: {np.mean(results['test_precision_malignant']):.4f} (±{np.std(results['test_precision_malignant']):.4f})")
+print(f"  Recall: {np.mean(results['test_recall_malignant']):.4f} (±{np.std(results['test_recall_malignant']):.4f})")
+print(f"  F1: {np.mean(results['test_f1_malignant']):.4f} (±{np.std(results['test_f1_malignant']):.4f})")
+print("\nBenign:")
+print(f"  Precision: {np.mean(results['test_precision_benign']):.4f} (±{np.std(results['test_precision_benign']):.4f})")
+print(f"  Recall: {np.mean(results['test_recall_benign']):.4f} (±{np.std(results['test_recall_benign']):.4f})")
+print(f"  F1: {np.mean(results['test_f1_benign']):.4f} (±{np.std(results['test_f1_benign']):.4f})")
+# Extract cross-validation scores
+cv_scores = results['test_accuracy']
+
+# Compute mean and standard error
+mean_score = np.mean(cv_scores)
+std_error = st.sem(cv_scores)  # Standard Error of the Mean (SEM)
+
+# Calculate confidence interval
+confidence = 0.95
+ci_lower, ci_upper = st.t.interval(confidence, len(cv_scores)-1, loc=mean_score, scale=std_error)
+
+print(f"Mean Score: {mean_score:.4f}")
+print(f"95% Confidence Interval: ({ci_lower:.4f}, {ci_upper:.4f})")
+
+#Random search
+# Define parameter distributions
+param_dist = {
+    'svc__C': loguniform(1e-3, 1e3),
+    'svc__kernel': ['linear', 'rbf'],
+    'svc__gamma': ['scale', 'auto'] + list(np.logspace(-3, 3, 5)),
+    'svc__shrinking': [True, False],  # Use shrinking heuristic (default=True)
+    'svc__probability': [True, False],  # Enable probability estimates (default=False)
+    'svc__tol': [1e-3, 1e-4, 1e-5],  # Tolerance for stopping (default=1e-3)
+    'svc__class_weight': [None, 'balanced']  # Handle imbalanced classes (default=None)
+}
+
+metrics = []
+
+pipeline = Pipeline([('scaler', StandardScaler()), ('svc', SVC(class_weight='balanced'))])
+
+# Initialize RandomizedSearchCV with OUTER CV
+random_search = RandomizedSearchCV(
+    pipeline,
+    param_distributions=param_dist,
+    n_iter=20,  # Number of random combinations to try
+    cv=cv_inner,  # Inner CV for hyperparameter tuning
+    scoring='accuracy',
+    n_jobs=-1,
+    random_state=42,
+    verbose=2,
+    refit=True  # Refit the best model on the full dataset
+)
+
+# Fit on ALL data (handles train/test splits internally)
+random_search.fit(X_scaled, labels, groups=nodules)
+
+# Best model and params
+print("Best params:", random_search.best_params_)
+best_model_r = random_search.best_estimator_
+
+# Initialize RandomizedSearchCV with OUTER CV. We could not go with the previous way as the grid search
+# because we want to avoid changing the model randomly between each fold
+scoring = {
+    'accuracy': 'accuracy',
+    'precision_malignant': make_scorer(precision_score, pos_label='Malignant'),
+    'recall_malignant': make_scorer(recall_score, pos_label='Malignant'),
+    'f1_malignant': make_scorer(f1_score, pos_label='Malignant'),
+    'precision_benign': make_scorer(precision_score, pos_label='Benign'),
+    'recall_benign': make_scorer(recall_score, pos_label='Benign'),
+    'f1_benign': make_scorer(f1_score, pos_label='Benign')
+}
+
+# Run cross-validation
+results = cross_validate(
+    best_model_r,
+    X_scaled,
+    labels,
+    cv=cv_outer,
+    groups=nodules,
+    scoring=scoring,
+    n_jobs=-1
+)
+
+# Print full results
+print("\n=== Detailed Metrics Per Fold ===")
+for fold in range(10):
+    print(f"\nFold {fold + 1}:")
+    print(f"  Accuracy: {results['test_accuracy'][fold]:.4f}")
+    print("  Malignant:")
+    print(f"    Precision: {results['test_precision_malignant'][fold]:.4f}")
+    print(f"    Recall: {results['test_recall_malignant'][fold]:.4f}")
+    print(f"    F1: {results['test_f1_malignant'][fold]:.4f}")
+    print("  Benign:")
+    print(f"    Precision: {results['test_precision_benign'][fold]:.4f}")
+    print(f"    Recall: {results['test_recall_benign'][fold]:.4f}")
+    print(f"    F1: {results['test_f1_benign'][fold]:.4f}")
+
+# Print averages
+print("\n=== Average Metrics ===")
+print(f"Accuracy: {np.mean(results['test_accuracy']):.4f} (±{np.std(results['test_accuracy']):.4f})")
+print("\nMalignant:")
+print(f"  Precision: {np.mean(results['test_precision_malignant']):.4f} (±{np.std(results['test_precision_malignant']):.4f})")
+print(f"  Recall: {np.mean(results['test_recall_malignant']):.4f} (±{np.std(results['test_recall_malignant']):.4f})")
+print(f"  F1: {np.mean(results['test_f1_malignant']):.4f} (±{np.std(results['test_f1_malignant']):.4f})")
+print("\nBenign:")
+print(f"  Precision: {np.mean(results['test_precision_benign']):.4f} (±{np.std(results['test_precision_benign']):.4f})")
+print(f"  Recall: {np.mean(results['test_recall_benign']):.4f} (±{np.std(results['test_recall_benign']):.4f})")
+print(f"  F1: {np.mean(results['test_f1_benign']):.4f} (±{np.std(results['test_f1_benign']):.4f})")
+# Extract cross-validation scores
+cv_scores = results['test_accuracy']
+
+# Compute mean and standard error
+mean_score = np.mean(cv_scores)
+std_error = st.sem(cv_scores)  # Standard Error of the Mean (SEM)
+
+# Calculate confidence interval
+confidence = 0.95
+ci_lower, ci_upper = st.t.interval(confidence, len(cv_scores)-1, loc=mean_score, scale=std_error)
+
+print(f"Mean Score: {mean_score:.4f}")
+print(f"95% Confidence Interval: ({ci_lower:.4f}, {ci_upper:.4f})")
+
+#OPTUNA
+study = optuna.create_study(direction="maximize", sampler=TPESampler(seed=42))
+study.optimize(lambda trial: objective(trial, X_scaled, labels, nodules), n_trials=200)
+print("\nThe best model obtained is the following one:", best_model)
+
+# Initialize RandomizedSearchCV with OUTER CV. We could not go with the previous way as the grid search
+# because we want to avoid changing the model randomly between each fold
+scoring = {
+    'accuracy': 'accuracy',
+    'precision_malignant': make_scorer(precision_score, pos_label='Malignant'),
+    'recall_malignant': make_scorer(recall_score, pos_label='Malignant'),
+    'f1_malignant': make_scorer(f1_score, pos_label='Malignant'),
+    'precision_benign': make_scorer(precision_score, pos_label='Benign'),
+    'recall_benign': make_scorer(recall_score, pos_label='Benign'),
+    'f1_benign': make_scorer(f1_score, pos_label='Benign')
+}
+
+# Run cross-validation
+results = cross_validate(
+    best_model,
+    X_scaled,
+    labels,
+    cv=cv_outer,
+    groups=nodules,
+    scoring=scoring,
+    n_jobs=-1
+)
+
+# Print full results
+print("\n=== Detailed Metrics Per Fold ===")
+for fold in range(5):
+    print(f"\nFold {fold + 1}:")
+    print(f"  Accuracy: {results['test_accuracy'][fold]:.4f}")
+    print("  Malignant:")
+    print(f"    Precision: {results['test_precision_malignant'][fold]:.4f}")
+    print(f"    Recall: {results['test_recall_malignant'][fold]:.4f}")
+    print(f"    F1: {results['test_f1_malignant'][fold]:.4f}")
+    print("  Benign:")
+    print(f"    Precision: {results['test_precision_benign'][fold]:.4f}")
+    print(f"    Recall: {results['test_recall_benign'][fold]:.4f}")
+    print(f"    F1: {results['test_f1_benign'][fold]:.4f}")
+
+# Print averages
+print("\n=== Average Metrics ===")
+print(f"Accuracy: {np.mean(results['test_accuracy']):.4f} (±{np.std(results['test_accuracy']):.4f})")
+print("\nMalignant:")
+print(f"  Precision: {np.mean(results['test_precision_malignant']):.4f} (±{np.std(results['test_precision_malignant']):.4f})")
+print(f"  Recall: {np.mean(results['test_recall_malignant']):.4f} (±{np.std(results['test_recall_malignant']):.4f})")
+print(f"  F1: {np.mean(results['test_f1_malignant']):.4f} (±{np.std(results['test_f1_malignant']):.4f})")
+print("\nBenign:")
+print(f"  Precision: {np.mean(results['test_precision_benign']):.4f} (±{np.std(results['test_precision_benign']):.4f})")
+print(f"  Recall: {np.mean(results['test_recall_benign']):.4f} (±{np.std(results['test_recall_benign']):.4f})")
+print(f"  F1: {np.mean(results['test_f1_benign']):.4f} (±{np.std(results['test_f1_benign']):.4f})")
+
+# Get best model
+best_params = study.best_params
+best_model = SVC(**best_params, random_state=42,class_weight='balanced')
+
+# Extract cross-validation scores
+cv_scores = results['test_accuracy']
+
+# Compute mean and standard error
+mean_score = np.mean(cv_scores)
+std_error = st.sem(cv_scores)  # Standard Error of the Mean (SEM)
+
+# Calculate confidence interval
+confidence = 0.95
+ci_lower, ci_upper = st.t.interval(confidence, len(cv_scores)-1, loc=mean_score, scale=std_error)
+
+print(f"Mean Score: {mean_score:.4f}")
+print(f"95% Confidence Interval: ({ci_lower:.4f}, {ci_upper:.4f})")

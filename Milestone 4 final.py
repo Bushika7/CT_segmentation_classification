@@ -387,10 +387,144 @@ try:
     plt.legend(title="Class Label")
     plt.show()
 
-    # Hierarchical Clustering (Dendrogram)
-    print("\nGenerating Hierarchical Clustering Dendrogram...")
+    # For one hot encoded data
+    check_clusters = [2, 5]
+    oh_labels_array = []
+    for element in check_clusters:
+        c_number = element
+        models = {
+        "K-Means": KMeans(n_clusters=c_number, random_state=42),
+        "Hierarchical (Ward)": AgglomerativeClustering(n_clusters=c_number, linkage='ward'),
+        "Hierarchical (Complete)": AgglomerativeClustering(n_clusters=c_number, linkage='complete'),
+        "Hierarchical (Average)": AgglomerativeClustering(n_clusters=c_number, linkage='average'),
+        "DBSCAN": DBSCAN(eps=0.5, min_samples=5)  # Alternative to HyperDB (Density-based)
+        }
+
+    # Store results
+    cluster_labels_oh = {}
+    silhouette_scores = {}
+
+    for name, model in models.items():
+        labels = model.fit_predict(df_oh)
+        cluster_labels_oh[name] = labels
+        
+        # Evaluate if clusters are meaningful (skip DBSCAN where n_clusters isn't defined)
+        if name != "DBSCAN":
+            silhouette_scores[name] = silhouette_score(df_oh, labels, metric='manhattan')
+
+    # Print results
+    print("ONE HOT ENCODED DATA: Silhouette Scores (Higher = Better Clustering) for number of clusters: ", element)
+    for name, score in silhouette_scores.items():
+        print(f"{name}: {score:.4f}")
+    oh_labels_array.append(cluster_labels_oh)
+    
+
+
+    # Store results
+    cluster_labels_oh = {}
+    silhouette_scores = {}
+    labels_array = []
+
+    for name, model in models.items():
+        labels = model.fit_predict(X_clustering)
+        cluster_labels_oh[name] = labels
+        
+        # Evaluate if clusters are meaningful (skip DBSCAN where n_clusters isn't defined)
+        if name != "DBSCAN":
+            silhouette_scores[name] = silhouette_score(X_clustering, labels, metric='chebyshev')
+
+    # Print results
+    print("NON-ONE HOT ENCODED DATA: Silhouette Scores (Higher = Better Clustering) for number of clusters: ", element)
+    for name, score in silhouette_scores.items():
+        print(f"{name}: {score:.4f}")
+    labels_array.append(cluster_labels_oh)
+    
+    oh_labels_array[1]
+    #Visualizing unsupervised clustering results on the T-SNE graph using one hot encoded, 5 clusters
+    method = 'Hierarchical (Complete)'
+    # Convert t-SNE results into a DataFrame for easy plotting
+    tsne_df = pd.DataFrame(tsne_oh, columns=['TSNE1', 'TSNE2'])
+    tsne_df['Label'] = oh_labels_array[1][method]  # Assuming 'Label' is your categorical class column
+
+    # Plot t-SNE with color coding
+    plt.figure(figsize=(10, 6))
+    sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
+
+    plt.title(f"t-SNE 5-class Visualization one hot data {method} clustering", fontsize=16)
+    plt.xlabel("TSNE1", fontweight='bold')
+    plt.ylabel("TSNE2", fontweight='bold')
+    plt.legend(title="Class Label")
+    plt.show()
+    
+    #Non one-hot encoded data, 2 clusters
+    # Convert t-SNE results into a DataFrame for easy plotting
+    method = "Hierarchical (Average)"
+    tsne_df = pd.DataFrame(tsne_default, columns=['TSNE1', 'TSNE2'])
+    tsne_df['Label'] = labels_array[0][method]  # Assuming 'Label' is your categorical class column
+
+    # Plot t-SNE with color coding
+    plt.figure(figsize=(10, 6))
+    sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
+
+    plt.title(f"t-SNE 2-class Visualization Non one hot data {method}", fontsize=16)
+    plt.xlabel("TSNE1", fontweight='bold')
+    plt.ylabel("TSNE2", fontweight='bold')
+    plt.legend(title="Class Label")
+    plt.show()
+    
+    # Convert t-SNE results into a DataFrame for easy plotting
+    method = "K-Means"
+    tsne_df = pd.DataFrame(tsne_default, columns=['TSNE1', 'TSNE2'])
+    tsne_df['Label'] = labels_array[1][method]  # Assuming 'Label' is your categorical class column
+
+    # Plot t-SNE with color coding
+    plt.figure(figsize=(10, 6))
+    sns.scatterplot(x=tsne_df['TSNE1'], y=tsne_df['TSNE2'], hue=tsne_df['Label'], palette='bright', alpha=0.7)
+
+    plt.title(f"t-SNE 5-class Visualization Non one hot data {method}", fontsize=16)
+    plt.xlabel("TSNE1", fontweight='bold')
+    plt.ylabel("TSNE2", fontweight='bold')
+    plt.legend(title="Class Label")
+    plt.show()
+
+    # Hierarchical Clustering (Dendrogram) WARD
+    print("Dendrogram generated.")
+    print("\nGenerating Hierarchical Clustering Dendrogram with method = ward...")
     plt.figure(figsize=(20, 10))
     linked = linkage(X_scaled, method='ward')
+    dendrogram(linked, orientation='top', distance_sort='descending', show_leaf_counts=True)
+    plt.title('Hierarchical Clustering Dendrogram')
+    plt.xlabel('Sample Index')
+    plt.ylabel('Distance')
+    plt.show()
+    print("Dendrogram generated.")
+    
+    # Hierarchical Clustering (Dendrogram) AVERAGE   
+    print("\nGenerating Hierarchical Clustering Dendrogram with method = average...")
+    plt.figure(figsize=(20, 10))
+    linked = linkage(X_scaled, method='average')
+    dendrogram(linked, orientation='top', distance_sort='descending', show_leaf_counts=True)
+    plt.title('Hierarchical Clustering Dendrogram')
+    plt.xlabel('Sample Index')
+    plt.ylabel('Distance')
+    plt.show()
+    print("Dendrogram generated.")
+    
+    # Hierarchical Clustering (Dendrogram) COMPLETE   
+    print("\nGenerating Hierarchical Clustering Dendrogram with method = complete...")
+    plt.figure(figsize=(20, 10))
+    linked = linkage(X_scaled, method='complete')
+    dendrogram(linked, orientation='top', distance_sort='descending', show_leaf_counts=True)
+    plt.title('Hierarchical Clustering Dendrogram')
+    plt.xlabel('Sample Index')
+    plt.ylabel('Distance')
+    plt.show()
+    print("Dendrogram generated.")
+    
+    # Hierarchical Clustering (Dendrogram) SINGLE   
+    print("\nGenerating Hierarchical Clustering Dendrogram with method = single...")
+    plt.figure(figsize=(20, 10))
+    linked = linkage(X_scaled, method='single')
     dendrogram(linked, orientation='top', distance_sort='descending', show_leaf_counts=True)
     plt.title('Hierarchical Clustering Dendrogram')
     plt.xlabel('Sample Index')
@@ -443,15 +577,46 @@ try:
             diagnosis_corr_oh = corr_matrix_oh['Diagnosis_value'].sort_values(ascending=False)
             print("\nCorrelation with Diagnosis_value (One-Hot Encoded Features):")
             print(diagnosis_corr_oh)
+            
 
             malig_corr_oh = corr_matrix_oh['Malignancy_value'].sort_values(ascending=False)
             print("\nCorrelation with Malignancy_value (One-Hot Encoded Features):")
             print(malig_corr_oh)
+            
+            # Plot the heatmap
+            print("\n Printing the heatmap with the correlations...")
+            sns.heatmap(corr_matrix, 
+                        cmap='coolwarm', 
+                        annot=True, 
+                        fmt=".2f", 
+                        square=True,
+                        cbar_kws={"shrink": 0.8},
+                        linewidths=0.5)
+            plt.title("Correlation Matrix Heatmap")
+            plt.tight_layout()
+            plt.show()
+            
+            # Correlations amtrix with one hot encoding
+            # Compute correlation of all annotations with the diagnosis column
+            df_oh["Diagnosis_value"] = df["Diagnosis_value"]
+            df_oh["Malignancy_value"]= df["Malignancy_value"]
+            corr_matrix = df_oh.corr()
+
+            # Extract correlations only for the "Diagnosis" column
+            diagnosis_corr_oh = corr_matrix["Diagnosis_value"].sort_values(ascending=False)
+
+            # Display the correlation values
+            print("\n Printing correlations of Diagnosis with oen hot encoding data...")
+            print(diagnosis_corr_oh)
+            malig_corr_oh = corr_matrix["Malignancy_value"].sort_values(ascending=False)
+            print("\n Printing correlations of Malignancy with oen hot encoding data...")
+            print(malig_corr_oh)
+        
+            
     else:
         print("Diagnosis_value or Malignancy_value not found for correlation analysis.")
 
-    print("\nConclusion on data exploration:")
-    print("The diameter is often a significant factor. Subtlety, Spiculation, and Lobulation also play important roles.")
+    
 
 except FileNotFoundError:
     print(f"Error: Metadata file for Milestone 2 not found at {metadata_file_path}. Please ensure the file exists.")
